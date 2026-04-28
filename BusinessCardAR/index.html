@@ -5,48 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AR Business Card</title>
     <style>
-        body { margin: 0; overflow: hidden; background: black; }
+        body { margin: 0; overflow: hidden; background: transparent; }
         canvas { display: block; }
     </style>
 
-   <!--MindAr Script -->
+    <!--MindAr Script -->
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-three.prod.js"></script>
-    
 </head>
 <body>
 
-<!-- ============================================================
-     UI OVERLAY — skill bars and portfolio links
-     These float on top of the 3D scene in both modes -->
-
-<div id="ui-overlay" style="
-    position: absolute;
-    bottom: 225px;
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    gap: 20px;
-    z-index: 10;
-">
-    <div style="text-align: center;">
-        <svg width="300" height="300" viewBox="0 0 300 300">
-            <circle cx="150" cy="150" r="100"
-                    fill="none" stroke="#111" stroke-width="4"/>
-            <circle cx="150" cy="150" r="100"
-                    fill="none" stroke="blue" stroke-width="4"
-                    stroke-dasharray="628" stroke-dashoffset="157"
-                    stroke-linecap="round"
-                    transform="rotate(-0 0 0)"/>
-        </svg>
-        <p style="color:white; font-size:11px; margin:4px 0 0;">Title</p>
-    </div>
-</div>
-
-<!--
-    Portfolio links — hidden by default
-    In AR mode they appear when the card is detected
-    In DEV mode they are always visible for testing
--->
 <div id="links" style="
     display: none;
     position: absolute;
@@ -55,11 +22,8 @@
     z-index: 10;
     flex-direction: column;
     gap: 10px;
-">
-</div>
+"></div>
 
-<!-- ============================================================ -->
-<!-- THREE.JS IMPORT MAP -->
 <script type="importmap">
     {
         "imports": {
@@ -73,336 +37,106 @@
     import * as THREE from 'three';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-    // ============================================================
-    // TOGGLE — change this one line to switch modes
     const AR_MODE = true;
 
-    // ============================================================
-    // declared VARIABLES
-    let scene, camera, renderer, controls;
-    let planet, satellite;
-    let logo;
-    let pieChartMesh;
-    let waveSphere;
-    let fresnelPulseSphere;
-    let planetMaterial;
-    let hologramMaterial;
-    let fresnelPulseMaterial;
-    let pieChartMaterial;
-    let autorotate = true;
-    let isDragging = false;
-    let prev = new THREE.Vector2()
-    let linkButton;
-    let leyenda;
+    // ── VARIABLES ────────────────────────────────────────────────
+    let scene, camera, renderer;
+    let planet, planetColombia,planetFrance, satellite, logo;
+    let pieChartGroup, pieChartMesh;
+    let waveSphere, fresnelPulseSphere;
+    let linkButton, leyenda;
+    let labelMeshes = [];
+
+    let planetMaterial, hologramMaterial, fresnelPulseMaterial;
+    let colombiaMaterial, franceMaterial, pieChartMaterial;
+
+    let autorotate   = true;
+    let isDragging   = false;
     let pointerMoved = false;
-    
-    
+    let prev         = new THREE.Vector2();
+
     const loader    = new GLTFLoader();
     const texLoader = new THREE.TextureLoader();
     const clock     = new THREE.Clock();
 
-    // ============================================================
-    // SHADER DEFINITION
+    // ── BAR LABELS — change text per bar independently ───────────
+    // Index matches uBarColor0..uBarColor13 exactly.
+    const BAR_LABELS = [
+        'Python',      // 0
+        'Pandas',    // 1
+        'Javascript',         // 2
+        'AWS',       // 3
+        'Node.js',       // 4
+        'GCP',       // 5
+        'Power BI',    // 6
+        'Claude',     // 7
+        'HTML',     // 8
+        'CSS',     // 9
+        'MYSQL',     // 10
+        'Three.js',   // 11
+        'Numpy',      // 12
+        'Git',      // 13
+    ];
+
+    // ── PLANET SHADER ────────────────────────────────────────────
     planetMaterial = new THREE.ShaderMaterial({
         uniforms: {
-            uTime:       { value: 0.0 },
-            uTexture:    { value: texLoader.load('Textures/_Transparency_White.png') },
-            uGlowColor:  { value: new THREE.Color(0x00aaff) },
-            uTexColor:   {value: new THREE.Color(0xd0e0e3) },
-            uFresnelPower: { value: 1.7 },  // higher = tighter, thinner glow ring
-            uFresnelStrength: { value: 1.5 } // overall brightness of the glow
+            uTime:            { value: 0.0 },
+            uTexture:         { value: texLoader.load('Textures/_Transparency_White.png') },
+            uGlowColor:       { value: new THREE.Color(0x00aaff) },
+            uTexColor:        { value: new THREE.Color(0xd0e0e3) },
+            uFresnelPower:    { value: 1.7 },
+            uFresnelStrength: { value: 1.5 },
         },
         vertexShader: `
-        varying vec2 vUv;
-        varying vec3 vNormalView;   // normal in VIEW space
-        varying vec3 vPositionView; // position in VIEW space
-
-        void main() {
-            vUv = uv;
-
-            // Transform normal into view space
-            // normalMatrix already converts to view space in Three.js
-            vNormalView = normalize(normalMatrix * normal);
-
-            // Transform position into view space
-            vec4 viewPos = modelViewMatrix * vec4(position, 1.0);
-            vPositionView = viewPos.xyz;
-
-            gl_Position = projectionMatrix * viewPos;
-        }
-    `,
+            varying vec2 vUv;
+            varying vec3 vNormalView;
+            varying vec3 vPositionView;
+            void main() {
+                vUv           = uv;
+                vNormalView   = normalize(normalMatrix * normal);
+                vec4 viewPos  = modelViewMatrix * vec4(position, 1.0);
+                vPositionView = viewPos.xyz;
+                gl_Position   = projectionMatrix * viewPos;
+            }
+        `,
         fragmentShader: `
-        uniform float     uTime;
-        uniform sampler2D uTexture;
-        uniform vec3      uGlowColor;
-        uniform vec3      uTexColor;
-        uniform float     uFresnelPower;
-        uniform float     uFresnelStrength;
-
-        varying vec2 vUv;
-        varying vec3 vNormalView;
-        varying vec3 vPositionView;
-
-        void main() {
-            // Base texture
-            //vec4 texColor = texture2D(uTexture, vUv);
-            vec4 texColor = texture2D(uTexture, vUv);
-
-            // --- CORRECT FRESNEL IN VIEW SPACE ---
-            // In view space the camera is always at the origin (0,0,0)
-            // So the view direction is simply the normalised position vector
-            // pointing from the surface toward the camera
-            vec3 viewDir = normalize(-vPositionView);
-
-            // dot product of normal and view direction
-            // = 1.0 when camera looks straight at the surface
-            // = 0.0 when camera looks at the edge (grazing angle)
-            float facing = dot(vNormalView, viewDir);
-
-            // Invert so edge = 1.0, center = 0.0
-            // pow() sharpens the falloff — uFresnelPower controls the tightness
-            float fresnel = pow(1.0 - facing, uFresnelPower);
-
-            // Animated scan line
-            float scanLine = sin(vUv.y * 50.0 + uTime * 2.0) * 0.04;
-            
-            float mask = texColor.a;
-            mask = smoothstep(0.2, 0.8, mask);
-            vec3 baseColor = uTexColor * mask;
-            
-            
-
-            // Combine texture + fresnel glow + scan line
-            vec3 finalColor = baseColor 
-                            + (uGlowColor * fresnel * uFresnelStrength) 
-                            + scanLine;
-
-            gl_FragColor = vec4(finalColor, 1.0);
-        }
-    `
+            uniform float     uTime;
+            uniform sampler2D uTexture;
+            uniform vec3      uGlowColor;
+            uniform vec3      uTexColor;
+            uniform float     uFresnelPower;
+            uniform float     uFresnelStrength;
+            varying vec2 vUv;
+            varying vec3 vNormalView;
+            varying vec3 vPositionView;
+            void main() {
+                vec4  texColor = texture2D(uTexture, vUv);
+                vec3  viewDir  = normalize(-vPositionView);
+                float facing   = dot(vNormalView, viewDir);
+                float fresnel  = pow(1.0 - facing, uFresnelPower);
+                float scanLine = sin(vUv.y * 50.0 + uTime * 2.0) * 0.04;
+                float mask     = smoothstep(0.2, 0.8, texColor.a);
+                vec3  baseColor  = uTexColor * mask;
+                vec3  finalColor = baseColor + (uGlowColor * fresnel * uFresnelStrength) + scanLine;
+                gl_FragColor = vec4(finalColor, 1.0);
+            }
+        `
     });
 
-    hologramMaterial = new THREE.ShaderMaterial({
+    // ── COLOMBIA PLANET SHADER ───────────────────────────────────
+    // FIX 1: added transparent:true + depthWrite:false so the texture alpha works.
+    // FIX 2: fragment now outputs mask as alpha so transparent PNG areas disappear.
+    // FIX 3: animate() was doing *= instead of = (fixed below).
+    colombiaMaterial = new THREE.ShaderMaterial({
         uniforms: {
-            uTime:       { value: 0.0 },
-            uColor:      { value: new THREE.Color(0x00ffcc) }, // hologram tint
-            uLineFreq:   { value: 300.0 },  // how many horizontal lines
-            uLineSpeed:  { value: -5 },   // how fast lines scroll upward
-            uGridFreq:   { value: 20 },  // density of background grid
-            uBrightness: { value: 0.2 },   // overall brightness
+            uTime:    { value: 0.0 },
+            uTexture: { value: texLoader.load('Textures/Colombia.png') },
+            uTexColor:{ value: new THREE.Color(0xfbbd00) },
         },
-        transparent: true, // required for alpha to work
+        transparent: true,      // ← FIX 1
+        depthWrite:  false,      // ← FIX 1
         side: THREE.DoubleSide,
-        depthWrite: false, // prevents z-fighting on transparent surfaces
-        vertexShader: `
-        varying vec2 vUv;
-        varying vec3 vNormalView;
-        varying vec3 vPositionView;
-
-        void main() {
-            vUv = uv;
-            vNormalView   = normalize(normalMatrix * normal);
-            vec4 viewPos  = modelViewMatrix * vec4(position, 1.0);
-            vPositionView = viewPos.xyz;
-            gl_Position   = projectionMatrix * viewPos;
-        }
-    `,
-        fragmentShader: `
-        uniform float uTime;
-        uniform vec3  uColor;
-        uniform float uLineFreq;
-        uniform float uLineSpeed;
-        uniform float uGridFreq;
-        uniform float uBrightness;
-
-        varying vec2 vUv;
-        varying vec3 vNormalView;
-        varying vec3 vPositionView;
-
-        void main() {
-
-            // --- HORIZONTAL SCROLLING LINES ---
-            // sin() creates a wave between -1 and 1
-            // we remap to 0..1 with * 0.5 + 0.5
-            // uLineFreq controls number of lines
-            // uTime * uLineSpeed scrolls them upward over time
-            float lines = sin(vUv.y * uLineFreq - uTime * uLineSpeed);
-            lines = lines * 0.5 + 0.5; // remap to 0..1
-
-            // Sharpen the lines so they are thin bright stripes
-            // smoothstep creates a clean edge instead of a fuzzy gradient
-            lines = smoothstep(0.4, 0.6, lines);
-
-            // --- BACKGROUND GRID ---
-            // Same technique on both U and V axes
-            float gridH = sin(vUv.y * uGridFreq) * 0.5 + 0.5;
-            float gridV = sin(vUv.x * uGridFreq) * 0.5 + 0.5;
-
-            // Multiply them — grid lines only appear where both are bright
-            float grid = gridH * gridV * 0.15; // 0.15 keeps it subtle
-
-            // --- FRESNEL FOR EDGE FADE ---
-            vec3  viewDir = normalize(-vPositionView);
-            float facing  = dot(vNormalView, viewDir);
-            float fresnel = pow(1.0 - facing, 2.0);
-
-            // --- COMBINE ---
-            // lines drives the main visibility
-            // grid adds background texture
-            // fresnel fades the center slightly for depth
-            float brightness = (lines + grid) * uBrightness;
-
-            // Alpha: lines are more opaque, gaps between are transparent
-            // fresnel adds extra opacity at the edge
-            float alpha = (lines * 0.7 + 0.1 + fresnel * 0.4);
-            alpha = clamp(alpha, 0.0, 1.0);
-
-            gl_FragColor = vec4(uColor * brightness, alpha);
-        }
-    `
-    });
-
-    fresnelPulseMaterial = new THREE.ShaderMaterial({
-        uniforms: {
-            uTime:          { value: 0.0 },
-            uGlowColor:     { value: new THREE.Color(0xd9ead3) },
-            uPulseColor:    { value: new THREE.Color(0xAAFF26) },
-            uFresnelPower:  { value: 2.0 }, // tightness of base glow ring
-            uPulseSpeed:    { value: 1.5 }, // how fast the pulse travels
-            uPulseWidth:    { value: 1.0 },// how wide the pulse ring is
-            uGlowStrength:  { value: 0.2 }, // brightness of base fresnel
-            uPulseStrength: { value: 1.2 }, // brightness of pulse ring
-        },
-        transparent:  true,
-        side:         THREE.FrontSide,
-        depthWrite:   false,
-        blending:     THREE.AdditiveBlending, // glow adds to whatever is behind it
-        vertexShader: `
-        varying vec3 vNormalView;
-        varying vec3 vPositionView;
-
-        void main() {
-            vNormalView   = normalize(normalMatrix * normal);
-            vec4 viewPos  = modelViewMatrix * vec4(position, 1.0);
-            vPositionView = viewPos.xyz;
-            gl_Position   = projectionMatrix * viewPos;
-        }
-    `,
-        fragmentShader: `
-        uniform float uTime;
-        uniform vec3  uGlowColor;
-        uniform vec3  uPulseColor;
-        uniform float uFresnelPower;
-        uniform float uPulseSpeed;
-        uniform float uPulseWidth;
-        uniform float uGlowStrength;
-        uniform float uPulseStrength;
-
-        varying vec3 vNormalView;
-        varying vec3 vPositionView;
-
-        void main() {
-
-            // --- BASE FRESNEL ---
-            // Same camera-correct Fresnel from Question 2
-            vec3  viewDir = normalize(-vPositionView);
-            float facing  = dot(vNormalView, viewDir);
-            float fresnel = pow(1.0 - facing, uFresnelPower);
-
-            // --- PULSE WAVE ---
-            // mod() creates a sawtooth from 0.0 to 1.0 that repeats
-            // uPulseSpeed controls how fast it repeats
-            float pulsePhase = mod(uTime * uPulseSpeed, 1.0);
-
-            // The pulse ring position: starts at fresnel=1 (edge)
-            // and moves inward toward fresnel=0 (center)
-            // We compare the current fresnel value to the pulse position
-            float pulseDist = abs(fresnel - (1.0 - pulsePhase));
-
-            // smoothstep creates a smooth bright ring of width uPulseWidth
-            // where pulseDist is small (the ring location) value is 1.0
-            // everywhere else it is 0.0
-            float pulse = 1.0 - smoothstep(0.0, uPulseWidth, pulseDist);
-
-            // Fade out the pulse as it reaches the center
-            // so it disappears cleanly rather than cutting off
-            float fadeOut = 1.0 - pulsePhase;
-            pulse *= fadeOut;
-
-            // --- COMBINE ---
-            // Base glow is always visible at the edge
-            vec3 glowContrib  = uGlowColor  * fresnel * uGlowStrength;
-
-            // Pulse ring adds on top
-            vec3 pulseContrib = uPulseColor * pulse   * uPulseStrength;
-
-            vec3  finalColor = glowContrib + pulseContrib;
-
-            // Alpha follows the combined brightness
-            // AdditiveBlending means alpha controls contribution strength
-            float alpha = clamp(fresnel * uGlowStrength + pulse * 0.8, 0.0, 1.0);
-
-            gl_FragColor = vec4(finalColor, alpha);
-        }
-    `
-    });
-
-    // PIE CHART RING SHADER
-    //
-    // TUNING GUIDE (edit the uniforms object below):
-    //
-    //  uNumBars        (int)     — how many bars are active, 1–8
-    //  uInnerRadius    (float)   — inner dead-zone radius; ~0.56 sits just
-    //                             outside the planet's visual edge
-    //  uOuterRadius    (float)   — maximum possible reach of any bar
-    //  uGapAngle       (float)   — gap between bars in radians
-    //                             (0.0 = no gap, 0.3 = wide gaps)
-    //  uBarLengths[i]  (float)   — 0..1, how far bar i reaches toward
-    //                             uOuterRadius (1.0 = full length)
-    //  uBarColors[i]   (Color)   — colour of bar i
-    //  uRotationSpeed  (float)   — radians/sec the whole ring spins
-    //  uScanSpeed      (float)   — speed of the radial scan-line effect
-    //  uGlowStrength   (float)   — overall brightness multiplier
-    // ─────────────────────────────────────────────────────────────
-    pieChartMaterial = new THREE.ShaderMaterial({
-        uniforms: {
-            uTime:          { value: 0.0 },
-
-            uNumBars:       { value: 14 },
-            uInnerRadius:   { value: 0.6 },
-            uOuterRadius:   { value: 1 },
-            uGapAngle:      { value: 0.02 },
-
-            // Individual bar lengths  (0 = invisible, 1 = full outer radius)
-            uBarLength0:    { value: 1.00 },
-            uBarLength1:    { value: 0.60 },
-            uBarLength2:    { value: 0.85 },
-            uBarLength3:    { value: 0.45 },
-            uBarLength4:    { value: 0.75 },
-            uBarLength5:    { value: 0.55 },
-            uBarLength6:    { value: 0.90 },
-            uBarLength7:    { value: 0.70 },
-
-            // Individual bar colours
-            uBarColor0:     { value: new THREE.Color(0x00aaff) },
-            uBarColor1:     { value: new THREE.Color(0xAAFF26) },
-            uBarColor2:     { value: new THREE.Color(0x00ffcc) },
-            uBarColor3:     { value: new THREE.Color(0x7dbf65) },
-            uBarColor4:     { value: new THREE.Color(0x00aaff) },
-            uBarColor5:     { value: new THREE.Color(0xAAFF26) },
-            uBarColor6:     { value: new THREE.Color(0x00ffcc) },
-            uBarColor7:     { value: new THREE.Color(0x7dbf65) },
-
-            uRotationSpeed: { value: 0.18 },
-            uScanSpeed:     { value: 3.0  },
-            uGlowStrength:  { value: 1.2  },
-        },
-
-        transparent: true,
-        side:        THREE.DoubleSide,
-        depthWrite:  false,
-        blending:    THREE.AdditiveBlending,
-
         vertexShader: `
             varying vec2 vUv;
             void main() {
@@ -410,239 +144,366 @@
                 gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
             }
         `,
+        fragmentShader: `
+            uniform sampler2D uTexture;
+            uniform vec3      uTexColor;
+            varying vec2 vUv;
+            void main() {
+                vec4  texColor = texture2D(uTexture, vUv);
+                float mask     = smoothstep(0.2, 0.8, texColor.a);
+                vec3  baseColor = uTexColor * mask;
+                gl_FragColor = vec4(baseColor, mask); // ← FIX 2: alpha = mask, not 1.0
+            }
+        `
+    });
 
-        // ── KEY FIX ──────────────────────────────────────────────
-        // GLSL ES 1.0 forbids indexing uniform arrays with a variable.
-        // We work around this with two helper functions that use
-        // explicit if-else chains — fully static indices only.
-        // ─────────────────────────────────────────────────────────
+    franceMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+            uTime:    { value: 0.0 },
+            uTexture: { value: texLoader.load('Textures/France.png') },
+            uTexColor:{ value: new THREE.Color(0xff007d) },
+        },
+        transparent: true,      // ← FIX 1
+        depthWrite:  false,      // ← FIX 1
+        side: THREE.DoubleSide,
+        vertexShader: `
+            varying vec2 vUv;
+            void main() {
+                vUv         = uv;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `,
+        fragmentShader: `
+            uniform sampler2D uTexture;
+            uniform vec3      uTexColor;
+            varying vec2 vUv;
+            void main() {
+                vec4  texColor = texture2D(uTexture, vUv);
+                float mask     = smoothstep(0.2, 0.8, texColor.a);
+                vec3  baseColor = uTexColor * mask;
+                gl_FragColor = vec4(baseColor, mask); // ← FIX 2: alpha = mask, not 1.0
+            }
+        `
+    });
+
+    // ── HOLOGRAM SHADER ──────────────────────────────────────────
+    hologramMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+            uTime:       { value: 0.0 },
+            uColor:      { value: new THREE.Color(0x00ffcc) },
+            uLineFreq:   { value: 300.0 },
+            uLineSpeed:  { value: -5 },
+            uGridFreq:   { value: 20 },
+            uBrightness: { value: 0.2 },
+        },
+        transparent: true,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        vertexShader: `
+            varying vec2 vUv;
+            varying vec3 vNormalView;
+            varying vec3 vPositionView;
+            void main() {
+                vUv           = uv;
+                vNormalView   = normalize(normalMatrix * normal);
+                vec4 viewPos  = modelViewMatrix * vec4(position, 1.0);
+                vPositionView = viewPos.xyz;
+                gl_Position   = projectionMatrix * viewPos;
+            }
+        `,
+        fragmentShader: `
+            uniform float uTime;
+            uniform vec3  uColor;
+            uniform float uLineFreq;
+            uniform float uLineSpeed;
+            uniform float uGridFreq;
+            uniform float uBrightness;
+            varying vec2 vUv;
+            varying vec3 vNormalView;
+            varying vec3 vPositionView;
+            void main() {
+                float lines   = smoothstep(0.4, 0.6,
+                    sin(vUv.y * uLineFreq - uTime * uLineSpeed) * 0.5 + 0.5);
+                float gridH   = sin(vUv.y * uGridFreq) * 0.5 + 0.5;
+                float gridV   = sin(vUv.x * uGridFreq) * 0.5 + 0.5;
+                float grid    = gridH * gridV * 0.15;
+                vec3  viewDir = normalize(-vPositionView);
+                float fresnel = pow(1.0 - dot(vNormalView, viewDir), 2.0);
+                float brightness = (lines + grid) * uBrightness;
+                float alpha      = clamp(lines * 0.7 + 0.1 + fresnel * 0.4, 0.0, 1.0);
+                gl_FragColor = vec4(uColor * brightness, alpha);
+            }
+        `
+    });
+
+    // ── FRESNEL PULSE SHADER ─────────────────────────────────────
+    // NOTE: removed the duplicate declaration that was in the original file.
+    fresnelPulseMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+            uTime:          { value: 0.0 },
+            uGlowColor:     { value: new THREE.Color(0xd9ead3) },
+            uPulseColor:    { value: new THREE.Color(0xAAFF26) },
+            uFresnelPower:  { value: 2.0 },
+            uPulseSpeed:    { value: 1.5 },
+            uPulseWidth:    { value: 1.0 },
+            uGlowStrength:  { value: 0.2 },
+            uPulseStrength: { value: 1.2 },
+        },
+        transparent: true,
+        side:        THREE.FrontSide,
+        depthWrite:  false,
+        blending:    THREE.AdditiveBlending,
+        vertexShader: `
+            varying vec3 vNormalView;
+            varying vec3 vPositionView;
+            void main() {
+                vNormalView   = normalize(normalMatrix * normal);
+                vec4 viewPos  = modelViewMatrix * vec4(position, 1.0);
+                vPositionView = viewPos.xyz;
+                gl_Position   = projectionMatrix * viewPos;
+            }
+        `,
+        fragmentShader: `
+            uniform float uTime;
+            uniform vec3  uGlowColor;
+            uniform vec3  uPulseColor;
+            uniform float uFresnelPower;
+            uniform float uPulseSpeed;
+            uniform float uPulseWidth;
+            uniform float uGlowStrength;
+            uniform float uPulseStrength;
+            varying vec3 vNormalView;
+            varying vec3 vPositionView;
+            void main() {
+                vec3  viewDir    = normalize(-vPositionView);
+                float facing     = dot(vNormalView, viewDir);
+                float fresnel    = pow(1.0 - facing, uFresnelPower);
+                float pulsePhase = mod(uTime * uPulseSpeed, 1.0);
+                float pulseDist  = abs(fresnel - (1.0 - pulsePhase));
+                float pulse      = (1.0 - smoothstep(0.0, uPulseWidth, pulseDist))
+                                 * (1.0 - pulsePhase);
+                vec3  col   = uGlowColor * fresnel * uGlowStrength
+                            + uPulseColor * pulse * uPulseStrength;
+                float alpha = clamp(fresnel * uGlowStrength + pulse * 0.8, 0.0, 1.0);
+                gl_FragColor = vec4(col, alpha);
+            }
+        `
+    });
+
+    // ── PIE CHART SHADER ─────────────────────────────────────────
+    pieChartMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+            uTime:        { value: 0.0 },
+            uNumBars:     { value: 14 },
+            uInnerRadius: { value: 0.6 },
+            uOuterRadius: { value: 1.0 },
+            uGapAngle:    { value: 0.02 },
+
+            uBarLength0:  { value: 1.00 }, uBarLength1:  { value: 0.60 },
+            uBarLength2:  { value: 0.85 }, uBarLength3:  { value: 0.70 },
+            uBarLength4:  { value: 0.75 }, uBarLength5:  { value: 0.60 },
+            uBarLength6:  { value: 0.90 }, uBarLength7:  { value: 0.70 },
+            uBarLength8:  { value: 0.75 }, uBarLength9:  { value: 0.60 },
+            uBarLength10: { value: 0.90 }, uBarLength11: { value: 0.70 },
+            uBarLength12: { value: 0.75 }, uBarLength13: { value: 0.60 },
+
+            uBarColor0:  { value: new THREE.Color(0x00aaff) },
+            uBarColor1:  { value: new THREE.Color(0xAAFF26) },
+            uBarColor2:  { value: new THREE.Color(0x00ffcc) },
+            uBarColor3:  { value: new THREE.Color(0x7dbf65) },
+            uBarColor4:  { value: new THREE.Color(0x00aaff) },
+            uBarColor5:  { value: new THREE.Color(0xAAFF26) },
+            uBarColor6:  { value: new THREE.Color(0x00ffcc) },
+            uBarColor7:  { value: new THREE.Color(0x7dbf65) },
+            uBarColor8:  { value: new THREE.Color(0x00aaff) },
+            uBarColor9:  { value: new THREE.Color(0xAAFF26) },
+            uBarColor10: { value: new THREE.Color(0x00ffcc) },
+            uBarColor11: { value: new THREE.Color(0x7dbf65) },
+            uBarColor12: { value: new THREE.Color(0x00aaff) },
+            uBarColor13: { value: new THREE.Color(0xAAFF26) },
+
+            uRotationSpeed: { value: 0.05 },
+            uScanSpeed:     { value: 0.8  },
+            uGlowStrength:  { value: 1.2  },
+        },
+        transparent: true,
+        side:        THREE.DoubleSide,
+        depthWrite:  false,
+        blending:    THREE.AdditiveBlending,
+        vertexShader: `
+            varying vec2 vUv;
+            void main() {
+                vUv         = uv;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `,
         fragmentShader: `
             uniform float uTime;
             uniform int   uNumBars;
             uniform float uInnerRadius;
             uniform float uOuterRadius;
             uniform float uGapAngle;
- 
-            uniform float uBarLength0;
-            uniform float uBarLength1;
-            uniform float uBarLength2;
-            uniform float uBarLength3;
-            uniform float uBarLength4;
-            uniform float uBarLength5;
-            uniform float uBarLength6;
-            uniform float uBarLength7;
- 
-            uniform vec3  uBarColor0;
-            uniform vec3  uBarColor1;
-            uniform vec3  uBarColor2;
-            uniform vec3  uBarColor3;
-            uniform vec3  uBarColor4;
-            uniform vec3  uBarColor5;
-            uniform vec3  uBarColor6;
-            uniform vec3  uBarColor7;
- 
+
+            uniform float uBarLength0;  uniform float uBarLength1;
+            uniform float uBarLength2;  uniform float uBarLength3;
+            uniform float uBarLength4;  uniform float uBarLength5;
+            uniform float uBarLength6;  uniform float uBarLength7;
+            uniform float uBarLength8;  uniform float uBarLength9;
+            uniform float uBarLength10; uniform float uBarLength11;
+            uniform float uBarLength12; uniform float uBarLength13;
+
+            uniform vec3 uBarColor0;  uniform vec3 uBarColor1;
+            uniform vec3 uBarColor2;  uniform vec3 uBarColor3;
+            uniform vec3 uBarColor4;  uniform vec3 uBarColor5;
+            uniform vec3 uBarColor6;  uniform vec3 uBarColor7;
+            uniform vec3 uBarColor8;  uniform vec3 uBarColor9;
+            uniform vec3 uBarColor10; uniform vec3 uBarColor11;
+            uniform vec3 uBarColor12; uniform vec3 uBarColor13;
+
             uniform float uRotationSpeed;
             uniform float uScanSpeed;
             uniform float uGlowStrength;
- 
+
             varying vec2 vUv;
- 
-            // ── safe array accessors (no dynamic indexing) ────────
- 
+
             float getLength(int i) {
-                if (i == 0) return uBarLength0;
-                if (i == 1) return uBarLength1;
-                if (i == 2) return uBarLength2;
-                if (i == 3) return uBarLength3;
-                if (i == 4) return uBarLength4;
-                if (i == 5) return uBarLength5;
-                if (i == 6) return uBarLength6;
-                return uBarLength7;
+                if (i == 0)  return uBarLength0;  if (i == 1)  return uBarLength1;
+                if (i == 2)  return uBarLength2;  if (i == 3)  return uBarLength3;
+                if (i == 4)  return uBarLength4;  if (i == 5)  return uBarLength5;
+                if (i == 6)  return uBarLength6;  if (i == 7)  return uBarLength7;
+                if (i == 8)  return uBarLength8;  if (i == 9)  return uBarLength9;
+                if (i == 10) return uBarLength10; if (i == 11) return uBarLength11;
+                if (i == 12) return uBarLength12; return uBarLength13;
             }
- 
             vec3 getColor(int i) {
-                if (i == 0) return uBarColor0;
-                if (i == 1) return uBarColor1;
-                if (i == 2) return uBarColor2;
-                if (i == 3) return uBarColor3;
-                if (i == 4) return uBarColor4;
-                if (i == 5) return uBarColor5;
-                if (i == 6) return uBarColor6;
-                return uBarColor7;
+                if (i == 0)  return uBarColor0;  if (i == 1)  return uBarColor1;
+                if (i == 2)  return uBarColor2;  if (i == 3)  return uBarColor3;
+                if (i == 4)  return uBarColor4;  if (i == 5)  return uBarColor5;
+                if (i == 6)  return uBarColor6;  if (i == 7)  return uBarColor7;
+                if (i == 8)  return uBarColor8;  if (i == 9)  return uBarColor9;
+                if (i == 10) return uBarColor10; if (i == 11) return uBarColor11;
+                if (i == 12) return uBarColor12; return uBarColor13;
             }
- 
+
             void main() {
- 
-                // Remap UV [0,1] → centred [-1,1]
                 vec2  p      = vUv * 2.0 - 1.0;
                 float r      = length(p);
                 float TWO_PI = 6.28318530718;
- 
-                // ── inner dead zone (planet) ──────────────────────
+
                 if (r < uInnerRadius) discard;
- 
-                // ── outer clip ────────────────────────────────────
                 if (r > uOuterRadius) discard;
- 
-                // ── polar angle, rotated over time ────────────────
+
                 float theta = atan(p.y, p.x) - uTime * uRotationSpeed;
-                theta = mod(theta + TWO_PI, TWO_PI);   // 0 .. 2PI
- 
-                // ── slice geometry ────────────────────────────────
+                theta = mod(theta + TWO_PI, TWO_PI);
+
                 float n          = float(uNumBars);
                 float sliceAngle = TWO_PI / n;
                 float barAngle   = sliceAngle - uGapAngle;
- 
                 if (barAngle <= 0.0) discard;
- 
+
                 float sliceF     = theta / sliceAngle;
-                int   idx        = int(sliceF);               // which bar
+                int   idx        = int(sliceF);
                 float localTheta = (sliceF - float(idx)) * sliceAngle;
- 
-                // ── gap cull ──────────────────────────────────────
+
                 if (localTheta > barAngle) discard;
- 
-                // ── radial length cull ────────────────────────────
+
                 float barLen   = getLength(idx);
                 float barOuter = uInnerRadius + (uOuterRadius - uInnerRadius) * barLen;
                 if (r > barOuter) discard;
- 
-                // ── colour for this bar ───────────────────────────
-                vec3 col = getColor(idx);
- 
-                // ── 0→1 positions inside bar ──────────────────────
+
+                vec3  col      = getColor(idx);
                 float radialT  = (r - uInnerRadius) / (barOuter - uInnerRadius);
                 float angularT = localTheta / barAngle;
- 
-                // ── sci-fi radial scan line ───────────────────────
-                float scan = sin(r * 60.0 - uTime * uScanSpeed) * 0.5 + 0.5;
-                scan = smoothstep(0.35, 0.65, scan) * 0.25;
- 
-                // ── per-bar pulse ─────────────────────────────────
-                float pulse = sin(uTime * 1.8 + float(idx) * 0.9) * 0.12 + 0.88;
- 
-                // ── inner-edge glow ───────────────────────────────
-                float innerGlow = 1.0 - smoothstep(0.0, 0.06, radialT);
- 
-                // ── tip fade ──────────────────────────────────────
-                float tipFade = 1.0 - smoothstep(0.80, 1.0, radialT);
- 
-                // ── angular edge soft fade (anti-alias) ───────────
-                float AA       = 0.015;
-                float edgeFade = smoothstep(0.0, AA, angularT)
-                               * smoothstep(0.0, AA, 1.0 - angularT);
- 
-                // ── assemble ──────────────────────────────────────
+
+                float scan      = smoothstep(0.35, 0.65,
+                    sin(r * 2.0 - uTime * uScanSpeed) * 0.5 + 0.5) * 0.25;
+                float pulse     = sin(uTime * 1.8 + float(idx) * 0.9) * 0.12 + 0.88;
+                float innerGlow = 1.0 - smoothstep(0.0, 0.3, radialT);
+                float tipFade   = 1.0 - smoothstep(0.80, 1.0, radialT);
+                float AA        = 0.015;
+                float edgeFade  = smoothstep(0.0, AA, angularT)
+                                * smoothstep(0.0, AA, 1.0 - angularT);
+
                 float brightness = (0.55 + scan + innerGlow * 0.5)
                                  * tipFade * edgeFade * pulse * uGlowStrength;
- 
-                float alpha = brightness * (1.0 - radialT * 0.3);
- 
+                float alpha      = brightness * (1.0 - radialT * 0.3);
                 gl_FragColor = vec4(col * brightness, clamp(alpha, 0.0, 1.0));
             }
         `
     });
 
-    // ============================================================
-    // MODE SETUP
+    // ── RAYCASTER ────────────────────────────────────────────────
+    const raycaster = new THREE.Raycaster();
+    const mouse     = new THREE.Vector2();
+
+    function getMouse(e, el) {
+        const r = el.getBoundingClientRect();
+        return {
+            x:  ((e.clientX - r.left) / r.width)  * 2 - 1,
+            y: -((e.clientY - r.top)  / r.height) * 2 + 1,
+        };
+    }
+
+    function attachPointerEvents(el) {
+        el.addEventListener('pointerdown', (e) => {
+            pointerMoved = false;
+            const p = getMouse(e, el);
+            mouse.set(p.x, p.y);
+            raycaster.setFromCamera(mouse, camera);
+            if (raycaster.intersectObject(planet, true).length > 0) {
+                isDragging = true;
+                prev.set(e.clientX, e.clientY);
+            }
+        });
+        el.addEventListener('pointermove', (e) => {
+            pointerMoved = true;
+            if (!isDragging) return;
+            planet.rotation.y += (e.clientX - prev.x) * 0.005;
+            planet.rotation.x += (e.clientY - prev.y) * 0.005;
+            planet.rotation.x = THREE.MathUtils.clamp(planet.rotation.x, -1.2, 1.2);
+            prev.set(e.clientX, e.clientY);
+        });
+        el.addEventListener('pointerup', (e) => {
+            isDragging = false;
+            if (!pointerMoved && linkButton) {
+                const p = getMouse(e, el);
+                mouse.set(p.x, p.y);
+                raycaster.setFromCamera(mouse, camera);
+                if (raycaster.intersectObject(linkButton, true).length > 0) {
+                    window.open('https://javierladino.com', '_blank');
+                }
+            }
+        });
+    }
+
+    // ── MODE SETUP ───────────────────────────────────────────────
     if (AR_MODE) {
 
         const mindarThree = new window.MINDAR.IMAGE.MindARThree({
             container: document.body,
             imageTargetSrc: 'targets.mind',
         });
-
-        scene = mindarThree.scene;
-        camera = mindarThree.camera;
+        scene    = mindarThree.scene;
+        camera   = mindarThree.camera;
         renderer = mindarThree.renderer;
 
         const anchor = mindarThree.addAnchor(0);
-
-        anchor.onTargetFound = () => {
-            document.getElementById('links').style.display = 'flex';
-        };
-
-        anchor.onTargetLost = () => {
-            document.getElementById('links').style.display = 'none';
-        };
+        anchor.onTargetFound = () => { document.getElementById('links').style.display = 'flex'; };
+        anchor.onTargetLost  = () => { document.getElementById('links').style.display = 'none';  };
 
         loadObjects(anchor.group);
+        colombiaPlanetContainer(anchor.group);
+        francePlanetContainer(anchor.group);
         hologramPlanetContainer(anchor.group);
         fresnelPulseContainer(anchor.group);
         pieChartContainer(anchor.group);
         LogoContainer(anchor.group);
         LinkButtonContainer(anchor.group);
 
-        // ============================================================
-        // 🌍 PLANET ONLY ROTATION (AR MODE)
-        let raycaster = new THREE.Raycaster();
-        let mouse = new THREE.Vector2();
+        attachPointerEvents(renderer.domElement);
 
-        function getMouse(event) {
-            const rect = renderer.domElement.getBoundingClientRect();
-
-            return {
-                x: ((event.clientX - rect.left) / rect.width) * 2 - 1,
-                y: -((event.clientY - rect.top) / rect.height) * 2 + 1
-            };
-        }
-
-        renderer.domElement.addEventListener('pointerdown', (e) => {
-            
-            pointerMoved = false;
-            const pos = getMouse(e); 
-            mouse.set(pos.x, pos.y);
-
-            raycaster.setFromCamera(mouse, camera);
-
-            const hit = raycaster.intersectObject(planet, true);
-
-            if (hit.length > 0) {
-                isDragging = true;
-                prev.set(e.clientX, e.clientY);
-            }
-        });
-
-        renderer.domElement.addEventListener('pointermove', (e) => {
-            
-            pointerMoved = true;
-            if (!isDragging) return;
-
-            const dx = e.clientX - prev.x;
-            const dy = e.clientY - prev.y;
-
-            const speed = 0.005;
-
-            planet.rotation.y += dx * speed;
-            planet.rotation.x += dy * speed;
-
-            planet.rotation.x = THREE.MathUtils.clamp(
-                planet.rotation.x,
-                -1.2,
-                1.2
-            );
-
-            prev.set(e.clientX, e.clientY);
-        });
-
-        renderer.domElement.addEventListener('pointerup', (e) => {
-            isDragging = false;
-
-            if (!pointerMoved && linkButton) {
-                const pos = getMouse(e);
-                mouse.set(pos.x, pos.y);
-                raycaster.setFromCamera(mouse, camera);
-                const hit = raycaster.intersectObject(linkButton, true);
-                if (hit.length > 0) {
-                    window.open('https://javierladino.com', '_blank');
-                }
-            }
-        });
-
-        // AR loop
         (async () => {
             await mindarThree.start();
-
             renderer.setAnimationLoop(() => {
                 animate(clock.getElapsedTime());
                 renderer.render(scene, camera);
@@ -651,17 +512,9 @@
 
     } else {
 
-        // ============================================================
-        // DEV MODE (UPDATED)
         scene = new THREE.Scene();
         scene.background = new THREE.Color(0x000000);
-
-        camera = new THREE.PerspectiveCamera(
-            75,
-            window.innerWidth / window.innerHeight,
-            0.1,
-            1000
-        );
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         camera.position.z = 3;
 
         renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -671,6 +524,7 @@
         document.getElementById('links').style.display = 'flex';
 
         loadObjects(scene);
+        colombiaPlanetContainer(scene);
         hologramPlanetContainer(scene);
         fresnelPulseContainer(scene);
         LogoContainer(scene);
@@ -678,82 +532,14 @@
         LeyendaContainer(scene);
         pieChartContainer(scene);
 
-        // ============================================================
-        // 🌍 PLANET ONLY ROTATION (DEV MODE)
+        attachPointerEvents(renderer.domElement);
 
-        let raycaster = new THREE.Raycaster();
-        let mouse = new THREE.Vector2();
-        
-
-            function getMouse(event) {
-            const rect = renderer.domElement.getBoundingClientRect();
-
-            return {
-                x: ((event.clientX - rect.left) / rect.width) * 2 - 1,
-                y: -((event.clientY - rect.top) / rect.height) * 2 + 1
-            };
-        }
-
-        renderer.domElement.addEventListener('pointerdown', (e) => {
-            pointerMoved = false;
-            const pos = getMouse(e);
-            mouse.set(pos.x, pos.y);
-
-            raycaster.setFromCamera(mouse, camera);
-
-            const hit = raycaster.intersectObject(planet, true);
-
-            if (hit.length > 0) {
-                isDragging = true;
-                prev.set(e.clientX, e.clientY);
-            }
-        });
-
-        renderer.domElement.addEventListener('pointermove', (e) => {
-            
-            pointerMoved = true;
-            if (!isDragging) return;
-
-            const dx = e.clientX - prev.x;
-            const dy = e.clientY - prev.y;
-
-            const speed = 0.005;
-
-            planet.rotation.y += dx * speed;
-            planet.rotation.x += dy * speed;
-
-            planet.rotation.x = THREE.MathUtils.clamp(
-                planet.rotation.x,
-                -1.2,
-                1.2
-            );
-
-            prev.set(e.clientX, e.clientY);
-        });
-
-        renderer.domElement.addEventListener('pointerup', (e) => {
-            isDragging = false;
-
-            if (!pointerMoved && linkButton) {
-                const pos = getMouse(e);
-                mouse.set(pos.x, pos.y);
-                raycaster.setFromCamera(mouse, camera);
-                const hit = raycaster.intersectObject(linkButton, true);
-                if (hit.length > 0) {
-                    window.open('https://javierladino.com', '_blank');
-                }
-                }
-        });
-
-        // render loop
-        function devLoop() {
+        (function devLoop() {
             requestAnimationFrame(devLoop);
             animate(clock.getElapsedTime());
             renderer.render(scene, camera);
-        }
-        devLoop();
+        })();
 
-        // Keep proportions correct when browser window is resized
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
@@ -761,76 +547,70 @@
         });
     }
 
-    // ============================================================
-    // LOAD OBJECTS
-    // Called by both modes — receives either scene or anchor.group
-    // Adds lights and loads all 3D models into whichever container
+    // ── OBJECT CONTAINERS ────────────────────────────────────────
     function loadObjects(container) {
+        container.add(new THREE.AmbientLight(0xffffff, 0.5));
+        const sun = new THREE.DirectionalLight(0xffffff, 1.0);
+        sun.position.set(5, 3, 5);
+        container.add(sun);
 
-        // Ambient light — soft overall illumination
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-        container.add(ambientLight);
-
-        // Directional light — simulates sunlight hitting the planet
-        const sunLight = new THREE.DirectionalLight(0xffffff, 1.0);
-        sunLight.position.set(5, 3, 5);
-        container.add(sunLight);
-
-        // --- PLANET ---
-        // Built directly in Three.js using your shader
-        const planetGeometry = new THREE.SphereGeometry(1, 32, 32);
-        planet = new THREE.Mesh(planetGeometry, planetMaterial);
+        planet = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), planetMaterial);
         planet.scale.set(0.5, 0.5, 0.5);
         container.add(planet);
-        
-        // --- SATELLITE ---
-        loader.load(
-            'Models/Satelite_High.glb',
+
+        loader.load('Models/Satelite_High.glb',
             (gltf) => {
                 satellite = gltf.scene;
-                satellite.scale.set(0.05, 0.05, 0.05);
-                satellite.position.set(-0.7, 0.8, 0);
-                satellite.rotation.set(20, 120, 0); // values in radians
+                satellite.scale.set(0.04, 0.04, 0.04);
+                satellite.position.set(-0.64, 1, 0);
+                satellite.rotation.set(20, 120, 0);
                 container.add(satellite);
             },
-            (progress) => {
-                console.log('Loading satellite...',
-                    Math.round(progress.loaded / progress.total * 100) + '%');
-            },
-            (error) => {
-                console.error('Error loading satellite:', error);
-            }
+            null,
+            (e) => console.error(e)
         );
     }
-    function hologramPlanetContainer(container){
-        const hologramPlanet = new THREE.Group();
-        hologramPlanet.name = "Hologram_Planet";
 
-        const waveSphereGeometry = new THREE.SphereGeometry(1, 32, 32);
-        waveSphere = new THREE.Mesh(waveSphereGeometry, hologramMaterial);
+    function colombiaPlanetContainer(container) {
+        // FIX 3: was referencing waveSphere.raycast before waveSphere existed.
+        //        Now correctly sets planetColombia.raycast.
+        planetColombia = new THREE.Mesh(
+            new THREE.SphereGeometry(1, 32, 32),
+            colombiaMaterial
+        );
+        planetColombia.scale.set(0.501, 0.501, 0.501); // tiny offset to clear z-fight
+        planetColombia.raycast = () => {};              // ← FIX 3
+        container.add(planetColombia);
+    }
+
+    function francePlanetContainer(container) {
+        // FIX 3: was referencing waveSphere.raycast before waveSphere existed.
+        //        Now correctly sets planetFrance.raycast.
+        planetFrance = new THREE.Mesh(
+            new THREE.SphereGeometry(1, 32, 32),
+            franceMaterial
+        );
+        planetFrance.scale.set(0.501, 0.501, 0.501); // tiny offset to clear z-fight
+        planetFrance.raycast = () => {};              // ← FIX 3
+        container.add(planetFrance);
+    }
+
+    function hologramPlanetContainer(container) {
+        waveSphere = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), hologramMaterial);
         waveSphere.scale.set(0.52, 0.52, 0.52);
         waveSphere.raycast = () => {};
-        hologramPlanet.add(waveSphere);
-        container.add(hologramPlanet);
-
-        return hologramPlanet;
+        container.add(waveSphere);
     }
-    function fresnelPulseContainer(container){
-        const fresnelPulse = new THREE.Group();
-        fresnelPulse.name = "Fresnel_Pulse";
 
-        const fresnelPulseGeometry = new THREE.SphereGeometry(1, 32, 32);
-        fresnelPulseSphere = new THREE.Mesh(fresnelPulseGeometry, fresnelPulseMaterial);
+    function fresnelPulseContainer(container) {
+        fresnelPulseSphere = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), fresnelPulseMaterial);
         fresnelPulseSphere.scale.set(0.51, 0.51, 0.51);
         fresnelPulseSphere.raycast = () => {};
-        fresnelPulse.add(fresnelPulseSphere);
-        container.add(fresnelPulse);
-        
-        return fresnelPulse;
+        container.add(fresnelPulseSphere);
     }
-    function LogoContainer(container){
-        loader.load(
-            'Models/logo.glb',
+
+    function LogoContainer(container) {
+        loader.load('Models/logo.glb',
             (gltf) => {
                 logo = gltf.scene;
                 logo.scale.set(0.1, 0.1, 0.1);
@@ -838,131 +618,197 @@
                 container.add(logo);
             },
             null,
-            (error) => { console.error('Error loading logo:', error); }
+            (e) => console.error(e)
         );
     }
+
     function LinkButtonContainer(container) {
         const canvas = document.createElement('canvas');
-        canvas.width = 512;
-        canvas.height = 128;
+        canvas.width = 512; canvas.height = 128;
         const ctx = canvas.getContext('2d');
 
-        // Background fill
-        ctx.fillStyle = 'rgba(0, 170, 255, 0.2)';
-        ctx.beginPath();
-        ctx.roundRect(4, 4, 504, 120, 40);
-        ctx.fill();
+        ctx.fillStyle = 'rgba(0,170,255,0.2)';
+        ctx.beginPath(); ctx.roundRect(4, 4, 504, 120, 40); ctx.fill();
 
-        // Green border
-        ctx.strokeStyle = '#7dbf65';
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.roundRect(4, 4, 504, 120, 90);
-        ctx.stroke();
+        ctx.strokeStyle = '#7dbf65'; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.roundRect(4, 4, 504, 120, 90); ctx.stroke();
 
-        // Label text
         ctx.fillStyle = '#7dbf65';
         ctx.font = '300 36px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText('One Tap Away', 256, 64);
 
-        const texture = new THREE.CanvasTexture(canvas);
-        const geo = new THREE.PlaneGeometry(0.75, 0.1875);
-        const mat = new THREE.MeshBasicMaterial({
-            map: texture,
-            transparent: true,
-            depthWrite: false,
-            side: THREE.DoubleSide,
-        });
-
-        linkButton = new THREE.Mesh(geo, mat);
-        // Satellite is at (-0.7, 0.8, 0) — place button to its right
+        linkButton = new THREE.Mesh(
+            new THREE.PlaneGeometry(0.75, 0.1875),
+            new THREE.MeshBasicMaterial({
+                map: new THREE.CanvasTexture(canvas),
+                transparent: true, depthWrite: false, side: THREE.DoubleSide,
+            })
+        );
         linkButton.position.set(0, 1, 0);
         container.add(linkButton);
     }
-    function LeyendaContainer(container) {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
 
-        const ratio = window.devicePixelRatio || 1;
-        
-        const width = 512;
-        const height = 128;
-        
-        canvas.width = width * ratio;
-        canvas.height = height * ratio;
-        
-        canvas.style.width = width + 'px';
-        canvas.style.height = height + 'px';
+    function LeyendaContainer(container) {
+        const ratio  = window.devicePixelRatio || 1;
+        const canvas = document.createElement('canvas');
+        canvas.width = 512 * ratio; canvas.height = 128 * ratio;
+        const ctx = canvas.getContext('2d');
         ctx.scale(ratio, ratio);
 
-        // Background fill
-        ctx.fillStyle = 'rgba(100, 183, 101, 0.09)';
-        ctx.beginPath();
-        ctx.roundRect(4, 14, 504, 95, 1);
-        ctx.fill();
+        ctx.fillStyle = 'rgba(100,183,101,0.09)';
+        ctx.beginPath(); ctx.roundRect(4, 14, 504, 95, 1); ctx.fill();
 
-        // Label text
         ctx.fillStyle = '#7dbf65';
         ctx.font = '300 20px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText('Hi!, I am Javier Ladino // Data-Design Engineer', 256, 64);
-      
-        
 
-        const texture = new THREE.CanvasTexture(canvas);
-        const geo = new THREE.PlaneGeometry(0.75, 0.1875);
-        const mat = new THREE.MeshBasicMaterial({
-            map: texture,
-            transparent: true,
-            depthWrite: false,
-            side: THREE.DoubleSide,
-        });
-
-        leyenda = new THREE.Mesh(geo, mat);
-        // Satellite is at (-0.7, 0.8, 0) — place button to its right
+        leyenda = new THREE.Mesh(
+            new THREE.PlaneGeometry(0.75, 0.1875),
+            new THREE.MeshBasicMaterial({
+                map: new THREE.CanvasTexture(canvas),
+                transparent: true, depthWrite: false, side: THREE.DoubleSide,
+            })
+        );
         leyenda.position.set(0, 1.3, 0);
         leyenda.scale.set(2, 2, 2);
         container.add(leyenda);
     }
 
-    // PlaneGeometry(2,2): UV space [0,1]² remaps to world [-1,1]²
-    // so the shader's radii are in the same units as the planet.
-    // Planet visual radius ≈ 0.5  →  uInnerRadius 0.56 clears it.
-    function pieChartContainer(container) {
-        pieChartMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), pieChartMaterial);
-        pieChartMesh.position.set(0, 0, 0.01);  // tiny z-offset avoids z-fighting
-        pieChartMesh.raycast = () => {};         // pass-through for planet dragging
-        container.add(pieChartMesh);
-    }
-    
+    // ── PIE CHART CONTAINER (with text labels) ───────────────────
+    //
+    // Architecture:
+    //   pieChartGroup  (Three.Group, billboarded in animate)
+    //     ├─ pieChartMesh   (the shader ring)
+    //     └─ labelMesh[i]   (one canvas-text plane per bar)
+    //
+    // Text orientation: each label's local +X axis points TOWARD the
+    // circle centre, so the text reads outward→inward.
+    // In animate() we set each label's rotation.z = barWorldAngle + PI,
+    // which flips the +X direction to point inward along the radial.
+    //
+    // To change a label: edit BAR_LABELS[i] at the top of the file.
 
-    // ============================================================
-    // ANIMATE
-    // Runs every frame in both modes
-    // elapsed = total seconds since page loaded — used for smooth
-    // time-based animation that is framerate independent
-    // ============================================================
+    function makeLabelCanvas(text, hexColor) {
+        const W = 300, H = 52;
+        const canvas = document.createElement('canvas');
+        canvas.width = W; canvas.height = H;
+        const ctx = canvas.getContext('2d');
+
+        // sci-fi glow: draw text twice — blurred behind for glow, sharp on top
+        ctx.clearRect(0, 0, W, H);
+        ctx.font = 'bold 26px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        ctx.shadowColor  = hexColor;
+        ctx.shadowBlur   = 12;
+        ctx.fillStyle    = hexColor;
+        ctx.fillText(text, W / 2, H / 2);   // glow pass
+
+        ctx.shadowBlur   = 0;
+        ctx.fillStyle    = '#ffffff';
+        ctx.fillText(text, W / 2, H / 2);   // crisp pass on top
+
+        return new THREE.CanvasTexture(canvas);
+    }
+
+    function pieChartContainer(container) {
+        pieChartGroup = new THREE.Group();
+        pieChartGroup.position.set(0, 0, 0.01);
+
+        // ── ring mesh ──
+        pieChartMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), pieChartMaterial);
+        pieChartMesh.raycast = () => {};
+        pieChartGroup.add(pieChartMesh);
+
+        // ── one label per bar ──
+        const numBars = pieChartMaterial.uniforms.uNumBars.value;
+
+        for (let i = 0; i < numBars; i++) {
+            const label = BAR_LABELS[i] ?? `Bar ${i}`;
+            const col   = pieChartMaterial.uniforms[`uBarColor${i}`].value;
+            const hex   = '#' + col.getHexString();
+
+            const tex = makeLabelCanvas(label, hex);
+            const mat = new THREE.MeshBasicMaterial({
+                map:         tex,
+                transparent: true,
+                depthWrite:  false,
+                side:        THREE.DoubleSide,
+            });
+
+            // Width ≈ radial span of bar, height ≈ a thin strip within bar arc
+            const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.11), mat);
+            mesh.raycast = () => {};
+            pieChartGroup.add(mesh);
+            labelMeshes.push(mesh);
+        }
+
+        container.add(pieChartGroup);
+    }
+
+    // ── ANIMATE ──────────────────────────────────────────────────
     function animate(elapsed) {
 
-        planetMaterial.uniforms.uTime.value = elapsed;
-        hologramMaterial.uniforms.uTime.value = elapsed;
-        fresnelPulseMaterial.uniforms.uTime.value = elapsed * 0.8;
-        pieChartMaterial.uniforms.uTime.value = elapsed;
-        
+        planetMaterial.uniforms.uTime.value        = elapsed;
+        colombiaMaterial.uniforms.uTime.value      = elapsed;   // FIX 3: was *= elapsed
+        hologramMaterial.uniforms.uTime.value      = elapsed;
+        fresnelPulseMaterial.uniforms.uTime.value  = elapsed * 0.8;
+        pieChartMaterial.uniforms.uTime.value      = elapsed;
+
         if (planet && !isDragging && autorotate) {
-            planet.rotation.y += 0.003; // smooth continuous spin
-        }
-        
-        if (logo) {
-            logo.rotation.y = elapsed * 0.4;
+            planet.rotation.y         += 0.003;
+            if (planetColombia) planetColombia.rotation.y += 0.003;
+            if(planetFrance) planetFrance.rotation.y += 0.003;
         }
 
-        if (satellite) {
-            satellite.rotation.z = elapsed * 0.2;
+        if (logo)      logo.rotation.y      = elapsed * 0.4;
+        if (satellite) satellite.rotation.z = elapsed * 0.2;
+
+        // ── Billboard: whole pie-chart group faces camera ─────────
+        if (pieChartGroup) {
+            pieChartGroup.quaternion.copy(camera.quaternion);
+
+            // ── Update each label position + rotation ─────────────
+            // The shader rotates bars by:  theta_shader = theta_world - elapsed * rotSpeed
+            // So world angle of bar-i centre = i * sliceAngle + barAngle/2 + elapsed * rotSpeed
+            const numBars    = pieChartMaterial.uniforms.uNumBars.value;
+            const rotSpeed   = pieChartMaterial.uniforms.uRotationSpeed.value;
+            const innerR     = pieChartMaterial.uniforms.uInnerRadius.value;
+            const outerR     = pieChartMaterial.uniforms.uOuterRadius.value;
+            const gapAngle   = pieChartMaterial.uniforms.uGapAngle.value;
+            const TWO_PI     = Math.PI * 2;
+            const sliceAngle = TWO_PI / numBars;
+            const barAngle   = sliceAngle - gapAngle;
+
+            for (let i = 0; i < labelMeshes.length; i++) {
+                const barLen   = pieChartMaterial.uniforms[`uBarLength${i}`]?.value ?? 0.7;
+                const barOuter = innerR + (outerR - innerR) * barLen;
+
+                // radial midpoint of this bar
+                const rMid = (innerR + barOuter) * 0.5;
+
+                // world angle of bar-i angular centre (matching shader's rotation)
+                const worldAngle = i * sliceAngle + barAngle * 0.5 + elapsed * rotSpeed;
+
+                // position inside the group's XY plane
+                labelMeshes[i].position.set(
+                    rMid * Math.cos(worldAngle),
+                    rMid * Math.sin(worldAngle),
+                    0.001   // just in front of the ring mesh
+                );
+
+                // Rotate text so its +X axis (reading direction) points TOWARD centre.
+                // +X at worldAngle points OUTWARD, so we add PI to flip it inward.
+                labelMeshes[i].rotation.z = worldAngle + Math.PI;
+            }
         }
+
+        // Billboard standalone UI elements
+        if (linkButton) linkButton.quaternion.copy(camera.quaternion);
+        if (leyenda)    leyenda.quaternion.copy(camera.quaternion);
     }
 
 </script>
